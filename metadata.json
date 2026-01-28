@@ -1,0 +1,5 @@
+{
+  "name": "Budget Daily",
+  "description": "A robust daily budget tracker that automatically adds 30€ every day. Tracks expenses and history with persistent local storage.",
+  "requestFramePermissions": []
+}
