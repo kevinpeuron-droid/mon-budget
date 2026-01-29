@@ -1,5 +1,10 @@
 export const getTodayDateString = (): string => {
-  return new Date().toISOString().split('T')[0];
+  // Utilise l'heure locale au lieu de UTC pour éviter les décalages de date
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
 export const formatCurrency = (amount: number): string => {

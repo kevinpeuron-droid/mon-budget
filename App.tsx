@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Wallet, TrendingDown, History, Trash2, RefreshCw, Calculator, Calendar } from 'lucide-react';
+import { Wallet, TrendingDown, History, Trash2, RefreshCw, Calculator, Calendar, PiggyBank } from 'lucide-react';
 import { Card } from './components/Card';
 import { Button } from './components/Button';
 import { Input } from './components/Input';
@@ -34,14 +34,17 @@ const App: React.FC = () => {
           setBillingDay(savedBillingDay);
 
           // Calculate days missed logic
-          const lastDate = new Date(parsed.lastLoginDate);
+          // IMPORTANT: Use exact date strings for comparison to avoid timezone issues
+          const lastDateStr = parsed.lastLoginDate;
+          const lastDate = new Date(lastDateStr);
           const currentDate = new Date(today);
           
-          const diffTime = Math.abs(currentDate.getTime() - lastDate.getTime());
-          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-          
           let addedAmount = 0;
-          if (parsed.lastLoginDate < today) {
+          
+          // Only add money if the stored date is strictly before today
+          if (lastDateStr < today) {
+             const diffTime = Math.abs(currentDate.getTime() - lastDate.getTime());
+             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
              addedAmount = diffDays * DAILY_ALLOWANCE;
           }
 
@@ -103,11 +106,10 @@ const App: React.FC = () => {
     startDate.setHours(0, 0, 0, 0);
 
     // Calculate days passed in this cycle (including today)
-    // We treat the start date as day 1.
     const diffTime = Math.abs(now.getTime() - startDate.getTime());
-    const daysPassed = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1; // Avoid divide by zero, though unlikely
+    const daysPassed = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1; 
 
-    // Filter transactions
+    // Filter transactions for this period
     const periodTransactions = transactions.filter(t => {
       const tDate = new Date(t.date);
       return tDate >= startDate && t.type === 'expense';
@@ -115,12 +117,20 @@ const App: React.FC = () => {
 
     const totalSpent = periodTransactions.reduce((acc, t) => acc + t.amount, 0);
     const average = totalSpent / daysPassed;
+    
+    // Theoretical income for this period (e.g. 10 days * 30€ = 300€)
+    const theoreticalIncome = daysPassed * DAILY_ALLOWANCE;
+    
+    // Balance for the period (Income - Expense)
+    const periodBalance = theoreticalIncome - totalSpent;
 
     return {
       average,
       totalSpent,
       startDate,
-      daysPassed
+      daysPassed,
+      theoreticalIncome,
+      periodBalance
     };
   }, [transactions, billingDay]);
 
@@ -211,53 +221,72 @@ const App: React.FC = () => {
           </h1>
         </div>
         <p className="text-slate-400 text-sm">
-          Gérez votre budget quotidien en toute simplicité.
+          Chaque jour, +30€ sont ajoutés automatiquement.
         </p>
       </div>
 
-      {/* Balance Card */}
+      {/* Balance Card - Main Solde */}
       <Card className="relative overflow-hidden">
         <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
         <div className="text-center py-4">
-          <p className="text-slate-400 mb-1 font-medium text-sm uppercase tracking-wider">Solde Actuel</p>
+          <p className="text-slate-400 mb-1 font-medium text-sm uppercase tracking-wider">Solde Global</p>
           <div className={`text-5xl font-bold tracking-tight mb-2 ${balance >= 0 ? 'text-primary' : 'text-destructive'}`}>
             {formatCurrency(balance)}
           </div>
           {dailyAdded > 0 && (
-             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-               +{formatCurrency(dailyAdded)} ajoutés aujourd'hui
+             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 animate-pulse">
+               +{formatCurrency(dailyAdded)} reçus aujourd'hui
              </span>
           )}
         </div>
       </Card>
 
       {/* Statistics & Cycle Config */}
-      <Card title="Statistiques du Mois">
+      <Card title="Bilan de la Période">
         <div className="flex flex-col gap-4">
-          <div className="flex items-center justify-between p-3 bg-slate-900/50 rounded-lg border border-slate-800/50">
-             <div className="flex flex-col">
-                <span className="text-xs text-slate-500 uppercase tracking-wider mb-1">Dépense Moyenne</span>
-                <span className="text-xl font-bold text-slate-200">
-                  {formatCurrency(stats.average)} <span className="text-sm font-normal text-slate-500">/ jour</span>
-                </span>
-                <span className="text-xs text-slate-600 mt-1">
-                   Depuis le {stats.startDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} ({stats.daysPassed} jours)
-                </span>
+          
+          <div className="grid grid-cols-2 gap-3">
+             {/* Period Balance */}
+             <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-800/50 flex flex-col justify-between">
+                <div>
+                  <span className="text-xs text-slate-500 uppercase tracking-wider block mb-1">Solde Période</span>
+                  <div className="flex items-center gap-1">
+                    <span className={`text-lg font-bold ${stats.periodBalance >= 0 ? 'text-emerald-400' : 'text-destructive'}`}>
+                      {stats.periodBalance > 0 ? '+' : ''}{formatCurrency(stats.periodBalance)}
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-2 text-[10px] text-slate-500">
+                  Budget: {formatCurrency(stats.theoreticalIncome)}
+                </div>
              </div>
-             <div className="p-2 bg-slate-800 rounded-full">
-                <Calculator className="w-5 h-5 text-emerald-400" />
+
+             {/* Total Spent */}
+             <div className="p-3 bg-slate-900/50 rounded-lg border border-slate-800/50 flex flex-col justify-between">
+                <div>
+                  <span className="text-xs text-slate-500 uppercase tracking-wider block mb-1">Dépensé</span>
+                  <span className="text-lg font-bold text-slate-200">{formatCurrency(stats.totalSpent)}</span>
+                </div>
+                <div className="mt-2 text-[10px] text-slate-500">
+                  Moyenne: {formatCurrency(stats.average)}/j
+                </div>
              </div>
           </div>
+          
+          <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+             <span>Du {stats.startDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} à ce jour</span>
+             <span>{stats.daysPassed} jours écoulés</span>
+          </div>
 
-          <div className="flex flex-col gap-1.5">
-             <label className="text-sm font-medium text-slate-400 flex items-center gap-2">
-               <Calendar className="w-4 h-4" />
-               Début du cycle de facturation
+          <div className="flex flex-col gap-1.5 pt-2 border-t border-slate-800/50">
+             <label className="text-xs font-medium text-slate-400 flex items-center gap-2">
+               <Calendar className="w-3 h-3" />
+               Jour de renouvellement du cycle
              </label>
              <select 
                value={billingDay}
                onChange={handleBillingDayChange}
-               className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all appearance-none"
+               className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all appearance-none cursor-pointer hover:bg-slate-900"
                style={{ backgroundImage: 'none' }} 
              >
                 {[...Array(28)].map((_, i) => (
@@ -294,7 +323,7 @@ const App: React.FC = () => {
           </div>
           <Button type="submit" variant="destructive" fullWidth className="h-12 text-lg group">
             <TrendingDown className="w-5 h-5 mr-2 group-hover:scale-110 transition-transform" />
-            Déduire du budget
+            Déduire
           </Button>
         </form>
       </Card>
