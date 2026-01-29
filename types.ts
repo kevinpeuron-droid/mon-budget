@@ -9,6 +9,7 @@ export interface Transaction {
 export interface BudgetState {
   balance: number;
   lastLoginDate: string; // YYYY-MM-DD
+  billingStartDay: number; // 1-31
   transactions: Transaction[];
 }
 

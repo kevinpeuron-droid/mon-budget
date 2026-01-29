@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Wallet, TrendingDown, History, Trash2, ArrowRight, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Wallet, TrendingDown, History, Trash2, RefreshCw, Calculator, Calendar } from 'lucide-react';
 import { Card } from './components/Card';
 import { Button } from './components/Button';
 import { Input } from './components/Input';
@@ -13,6 +13,7 @@ const App: React.FC = () => {
   // State initialization
   const [balance, setBalance] = useState<number>(0);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [billingDay, setBillingDay] = useState<number>(1);
   const [amount, setAmount] = useState<string>('');
   const [description, setDescription] = useState<string>('');
   const [isLoaded, setIsLoaded] = useState(false);
@@ -28,62 +29,52 @@ const App: React.FC = () => {
         if (storedData) {
           const parsed: BudgetState = JSON.parse(storedData);
           
-          // Calculate days missed
+          // Legacy support (if billingStartDay doesn't exist yet)
+          const savedBillingDay = parsed.billingStartDay || 1;
+          setBillingDay(savedBillingDay);
+
+          // Calculate days missed logic
           const lastDate = new Date(parsed.lastLoginDate);
           const currentDate = new Date(today);
           
-          // Difference in time
           const diffTime = Math.abs(currentDate.getTime() - lastDate.getTime());
           const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
           
-          // Determine if we need to add funds (if current date is strictly after last login)
-          // Simple logic: If stored date is not today, we add for every day passed.
-          // Note: If user opens app multiple times same day, lastLoginDate is already today, so diff is 0.
-          
           let addedAmount = 0;
-          
-          // Check if the stored date is strictly before today
           if (parsed.lastLoginDate < today) {
-             // Calculate how many days have passed. 
-             // Example: Last login 2023-10-01. Today 2023-10-03.
-             // We missed 10-02 and 10-03. That is 2 days. 
-             // Let's rely on string comparison for simplicity or date math above.
-             // The diffDays calculation above gives us the difference.
-             
-             // If today > lastLoginDate, we add allowance * diffDays
-             // Actually, usually "Daily Budget" means you get money for TODAY as well if you haven't logged in.
-             // Logic: For every day that passed where I didn't get allowance, add it.
-             
              addedAmount = diffDays * DAILY_ALLOWANCE;
           }
 
-          setBalance(parsed.balance + addedAmount);
+          const newBalance = parsed.balance + addedAmount;
+          setBalance(newBalance);
           setTransactions(parsed.transactions || []);
           setDailyAdded(addedAmount);
           
-          // Update storage immediately with new date and balance
+          // Update storage immediately
           const newState: BudgetState = {
-            balance: parsed.balance + addedAmount,
+            balance: newBalance,
             transactions: parsed.transactions || [],
-            lastLoginDate: today
+            lastLoginDate: today,
+            billingStartDay: savedBillingDay
           };
           localStorage.setItem(STORAGE_KEY, JSON.stringify(newState));
           
         } else {
           // First time user
           const initialState: BudgetState = {
-            balance: DAILY_ALLOWANCE, // Start with one day allowance
+            balance: DAILY_ALLOWANCE,
             transactions: [],
-            lastLoginDate: today
+            lastLoginDate: today,
+            billingStartDay: 1
           };
           setBalance(initialState.balance);
           setTransactions([]);
           setDailyAdded(DAILY_ALLOWANCE);
+          setBillingDay(1);
           localStorage.setItem(STORAGE_KEY, JSON.stringify(initialState));
         }
       } catch (e) {
         console.error("Failed to load budget data", e);
-        // Fallback
         setBalance(0);
       } finally {
         setIsLoaded(true);
@@ -92,6 +83,65 @@ const App: React.FC = () => {
 
     loadData();
   }, []);
+
+  // Calculate Statistics based on Billing Cycle
+  const stats = useMemo(() => {
+    const now = new Date();
+    const currentDay = now.getDate();
+    let startDate: Date;
+
+    // Determine start date of current cycle
+    if (currentDay >= billingDay) {
+      // We are in the current month's cycle
+      startDate = new Date(now.getFullYear(), now.getMonth(), billingDay);
+    } else {
+      // We are in the previous month's cycle
+      startDate = new Date(now.getFullYear(), now.getMonth() - 1, billingDay);
+    }
+    
+    // Normalize time to midnight
+    startDate.setHours(0, 0, 0, 0);
+
+    // Calculate days passed in this cycle (including today)
+    // We treat the start date as day 1.
+    const diffTime = Math.abs(now.getTime() - startDate.getTime());
+    const daysPassed = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1; // Avoid divide by zero, though unlikely
+
+    // Filter transactions
+    const periodTransactions = transactions.filter(t => {
+      const tDate = new Date(t.date);
+      return tDate >= startDate && t.type === 'expense';
+    });
+
+    const totalSpent = periodTransactions.reduce((acc, t) => acc + t.amount, 0);
+    const average = totalSpent / daysPassed;
+
+    return {
+      average,
+      totalSpent,
+      startDate,
+      daysPassed
+    };
+  }, [transactions, billingDay]);
+
+  // Handle Billing Day Change
+  const handleBillingDayChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newDay = parseInt(e.target.value);
+    setBillingDay(newDay);
+    saveState(balance, transactions, newDay);
+  };
+
+  // Helper to save state
+  const saveState = (newBalance: number, newTransactions: Transaction[], newBillingDay: number) => {
+    const today = getTodayDateString();
+    const state: BudgetState = {
+      balance: newBalance,
+      transactions: newTransactions,
+      lastLoginDate: today,
+      billingStartDay: newBillingDay
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  };
 
   // Handle Expense Submission
   const handleAddExpense = (e: React.FormEvent) => {
@@ -117,19 +167,7 @@ const App: React.FC = () => {
     setAmount('');
     setDescription('');
 
-    // Persist
-    saveState(newBalance, newTransactions);
-  };
-
-  // Helper to save state
-  const saveState = (newBalance: number, newTransactions: Transaction[]) => {
-    const today = getTodayDateString();
-    const state: BudgetState = {
-      balance: newBalance,
-      transactions: newTransactions,
-      lastLoginDate: today
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    saveState(newBalance, newTransactions, billingDay);
   };
 
   // Delete Transaction
@@ -138,15 +176,13 @@ const App: React.FC = () => {
     if (!tx) return;
 
     const newTransactions = transactions.filter(t => t.id !== id);
-    // Refund the balance if we delete an expense
     const newBalance = balance + tx.amount;
 
     setBalance(newBalance);
     setTransactions(newTransactions);
-    saveState(newBalance, newTransactions);
+    saveState(newBalance, newTransactions, billingDay);
   };
 
-  // Reset App (Debug purpose mostly)
   const handleReset = () => {
     if (confirm("Voulez-vous vraiment réinitialiser toutes les données ?")) {
       localStorage.removeItem(STORAGE_KEY);
@@ -163,7 +199,7 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-8">
       {/* Header */}
       <div className="text-center space-y-2">
         <div className="flex items-center justify-center gap-2 mb-2">
@@ -195,6 +231,46 @@ const App: React.FC = () => {
         </div>
       </Card>
 
+      {/* Statistics & Cycle Config */}
+      <Card title="Statistiques du Mois">
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between p-3 bg-slate-900/50 rounded-lg border border-slate-800/50">
+             <div className="flex flex-col">
+                <span className="text-xs text-slate-500 uppercase tracking-wider mb-1">Dépense Moyenne</span>
+                <span className="text-xl font-bold text-slate-200">
+                  {formatCurrency(stats.average)} <span className="text-sm font-normal text-slate-500">/ jour</span>
+                </span>
+                <span className="text-xs text-slate-600 mt-1">
+                   Depuis le {stats.startDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} ({stats.daysPassed} jours)
+                </span>
+             </div>
+             <div className="p-2 bg-slate-800 rounded-full">
+                <Calculator className="w-5 h-5 text-emerald-400" />
+             </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+             <label className="text-sm font-medium text-slate-400 flex items-center gap-2">
+               <Calendar className="w-4 h-4" />
+               Début du cycle de facturation
+             </label>
+             <select 
+               value={billingDay}
+               onChange={handleBillingDayChange}
+               className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-all appearance-none"
+               style={{ backgroundImage: 'none' }} 
+             >
+                {[...Array(28)].map((_, i) => (
+                  <option key={i + 1} value={i + 1}>Le {i + 1} du mois</option>
+                ))}
+                <option value={29}>Le 29 du mois</option>
+                <option value={30}>Le 30 du mois</option>
+                <option value={31}>Le 31 du mois</option>
+             </select>
+          </div>
+        </div>
+      </Card>
+
       {/* Input Section */}
       <Card title="Nouvelle Dépense">
         <form onSubmit={handleAddExpense} className="space-y-4">
@@ -207,7 +283,6 @@ const App: React.FC = () => {
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               required
-              autoFocus
             />
             <Input 
               label="Description (Optionnel)" 
