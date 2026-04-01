@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Wallet, TrendingDown, History, Trash2, RefreshCw, Calculator, Calendar, PiggyBank } from 'lucide-react';
+import { Wallet, TrendingDown, History, Trash2, RefreshCw, Calculator, Calendar, PiggyBank, RotateCcw, Pencil, Check, X } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Card } from './components/Card';
 import { Button } from './components/Button';
 import { Input } from './components/Input';
@@ -18,6 +19,9 @@ const App: React.FC = () => {
   const [description, setDescription] = useState<string>('');
   const [isLoaded, setIsLoaded] = useState(false);
   const [dailyAdded, setDailyAdded] = useState<number>(0);
+  const [resetDateInput, setResetDateInput] = useState<string>(getTodayDateString());
+  const [isEditingBalance, setIsEditingBalance] = useState(false);
+  const [editBalanceValue, setEditBalanceValue] = useState<string>('');
 
   // Load data on mount
   useEffect(() => {
@@ -134,6 +138,79 @@ const App: React.FC = () => {
     };
   }, [transactions, billingDay]);
 
+  // Generate Balance History for Chart
+  const balanceHistory = useMemo(() => {
+    const history = [];
+    const today = new Date(getTodayDateString());
+    today.setHours(0, 0, 0, 0);
+
+    let runningBalance = balance;
+    const daysToShow = 14;
+
+    for (let i = 0; i < daysToShow; i++) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+      
+      history.unshift({
+        date: dateStr,
+        balance: runningBalance
+      });
+
+      const dayTransactions = transactions.filter(t => {
+        const tDate = new Date(t.date);
+        return tDate.getFullYear() === d.getFullYear() &&
+               tDate.getMonth() === d.getMonth() &&
+               tDate.getDate() === d.getDate();
+      });
+
+      const dayExpenses = dayTransactions
+        .filter(t => t.type === 'expense')
+        .reduce((sum, t) => sum + t.amount, 0);
+        
+      const dayIncomes = dayTransactions
+        .filter(t => t.type === 'income')
+        .reduce((sum, t) => sum + t.amount, 0);
+
+      const dayAdjustments = dayTransactions
+        .filter(t => t.type === 'adjustment')
+        .reduce((sum, t) => sum + t.amount, 0);
+
+      runningBalance = runningBalance - DAILY_ALLOWANCE + dayExpenses - dayIncomes - dayAdjustments;
+    }
+
+    return history;
+  }, [balance, transactions]);
+
+  const handleEditBalanceClick = () => {
+    setEditBalanceValue(balance.toString());
+    setIsEditingBalance(true);
+  };
+
+  const handleEditBalanceSubmit = () => {
+    const newBalance = parseFloat(editBalanceValue.replace(',', '.'));
+    if (isNaN(newBalance)) {
+      setIsEditingBalance(false);
+      return;
+    }
+
+    const difference = newBalance - balance;
+    if (difference !== 0) {
+      const newTransaction: Transaction = {
+        id: generateId(),
+        amount: Math.abs(difference),
+        description: 'Ajustement manuel',
+        date: new Date().toISOString(),
+        type: difference > 0 ? 'income' : 'expense'
+      };
+      const newTransactions = [newTransaction, ...transactions];
+      setBalance(newBalance);
+      setTransactions(newTransactions);
+      saveState(newBalance, newTransactions, billingDay);
+    }
+    setIsEditingBalance(false);
+  };
+
   // Handle Billing Day Change
   const handleBillingDayChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newDay = parseInt(e.target.value);
@@ -186,7 +263,7 @@ const App: React.FC = () => {
     if (!tx) return;
 
     const newTransactions = transactions.filter(t => t.id !== id);
-    const newBalance = balance + tx.amount;
+    const newBalance = tx.type === 'income' ? balance - tx.amount : balance + tx.amount;
 
     setBalance(newBalance);
     setTransactions(newTransactions);
@@ -197,6 +274,48 @@ const App: React.FC = () => {
     if (confirm("Voulez-vous vraiment réinitialiser toutes les données ?")) {
       localStorage.removeItem(STORAGE_KEY);
       window.location.reload();
+    }
+  };
+
+  const handleResetFromDate = () => {
+    if (!resetDateInput) return;
+    
+    if (confirm(`Voulez-vous vraiment remettre le compteur à 0 à partir du ${new Date(resetDateInput).toLocaleDateString('fr-FR')} ? Toutes les transactions antérieures seront supprimées.`)) {
+      const resetDate = new Date(resetDateInput);
+      resetDate.setHours(0, 0, 0, 0);
+      
+      const today = new Date(getTodayDateString());
+      today.setHours(0, 0, 0, 0);
+      
+      if (resetDate > today) {
+        alert("La date ne peut pas être dans le futur.");
+        return;
+      }
+
+      // Keep only transactions ON or AFTER the reset date
+      const newTransactions = transactions.filter(t => {
+        const tDate = new Date(t.date);
+        tDate.setHours(0, 0, 0, 0);
+        return tDate >= resetDate;
+      });
+
+      const diffTime = Math.abs(today.getTime() - resetDate.getTime());
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      
+      const totalExpenses = newTransactions
+        .filter(t => t.type === 'expense')
+        .reduce((acc, t) => acc + t.amount, 0);
+      const totalIncomes = newTransactions
+        .filter(t => t.type === 'income')
+        .reduce((acc, t) => acc + t.amount, 0);
+        
+      const newBalance = (diffDays * DAILY_ALLOWANCE) + totalIncomes - totalExpenses;
+
+      setBalance(newBalance);
+      setTransactions(newTransactions);
+      setDailyAdded(0);
+      
+      saveState(newBalance, newTransactions, billingDay);
     }
   };
 
@@ -230,14 +349,61 @@ const App: React.FC = () => {
         <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
         <div className="text-center py-4">
           <p className="text-slate-400 mb-1 font-medium text-sm uppercase tracking-wider">Solde Global</p>
-          <div className={`text-5xl font-bold tracking-tight mb-2 ${balance >= 0 ? 'text-primary' : 'text-destructive'}`}>
-            {formatCurrency(balance)}
-          </div>
+          
+          {isEditingBalance ? (
+            <div className="flex items-center justify-center gap-2 mb-2">
+              <input 
+                type="number" 
+                step="0.01" 
+                value={editBalanceValue} 
+                onChange={(e) => setEditBalanceValue(e.target.value)}
+                className="w-32 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-center text-2xl font-bold text-slate-100 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                autoFocus
+              />
+              <button onClick={handleEditBalanceSubmit} className="p-2 bg-emerald-500/20 text-emerald-400 rounded-lg hover:bg-emerald-500/30 transition-colors">
+                <Check className="w-5 h-5" />
+              </button>
+              <button onClick={() => setIsEditingBalance(false)} className="p-2 bg-slate-800 text-slate-400 rounded-lg hover:bg-slate-700 transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center gap-3 mb-2 group">
+              <div className={`text-5xl font-bold tracking-tight ${balance >= 0 ? 'text-primary' : 'text-destructive'}`}>
+                {formatCurrency(balance)}
+              </div>
+              <button 
+                onClick={handleEditBalanceClick}
+                className="opacity-0 group-hover:opacity-100 p-2 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-full transition-all"
+                title="Modifier le solde"
+              >
+                <Pencil className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
           {dailyAdded > 0 && (
              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 animate-pulse">
                +{formatCurrency(dailyAdded)} reçus aujourd'hui
              </span>
           )}
+        </div>
+
+        {/* Chart integrated here */}
+        <div className="h-32 w-full mt-2 pt-4 border-t border-slate-800/50">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={balanceHistory} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+              <XAxis dataKey="date" stroke="#94a3b8" fontSize={10} tickLine={false} axisLine={false} />
+              <YAxis stroke="#94a3b8" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(value) => `${value}€`} />
+              <Tooltip 
+                contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', fontSize: '12px' }}
+                itemStyle={{ color: '#10b981' }}
+                formatter={(value: number) => [`${value.toFixed(2)} €`, 'Solde']}
+              />
+              <Line type="monotone" dataKey="balance" stroke="#10b981" strokeWidth={2} dot={{ r: 3, fill: '#10b981', strokeWidth: 0 }} activeDot={{ r: 5 }} />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
       </Card>
 
@@ -351,8 +517,8 @@ const App: React.FC = () => {
                   <span className="text-xs text-slate-500">{formatDate(tx.date)}</span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="font-bold text-destructive">
-                    -{formatCurrency(tx.amount)}
+                  <span className={`font-bold ${tx.type === 'income' ? 'text-emerald-400' : 'text-destructive'}`}>
+                    {tx.type === 'income' ? '+' : '-'}{formatCurrency(tx.amount)}
                   </span>
                   <button 
                     onClick={() => deleteTransaction(tx.id)}
@@ -369,13 +535,34 @@ const App: React.FC = () => {
       </Card>
 
       {/* Footer / Reset */}
-      <div className="flex justify-center pt-4">
+      <div className="flex flex-col items-center gap-6 pt-4 border-t border-slate-800/50 mt-8">
+        <div className="w-full max-w-sm bg-slate-900/50 p-4 rounded-xl border border-slate-800/50 space-y-3">
+          <h4 className="text-sm font-medium text-slate-300 flex items-center gap-2">
+            <RotateCcw className="w-4 h-4 text-slate-400" />
+            Remise à zéro
+          </h4>
+          <p className="text-xs text-slate-500">
+            Remet le solde à 0€ à la date choisie et supprime l'historique précédent.
+          </p>
+          <div className="flex items-center gap-2">
+            <Input 
+              type="date" 
+              value={resetDateInput} 
+              onChange={(e) => setResetDateInput(e.target.value)}
+              className="text-sm flex-1"
+            />
+            <Button variant="outline" onClick={handleResetFromDate} className="whitespace-nowrap">
+              Appliquer
+            </Button>
+          </div>
+        </div>
+
         <button 
           onClick={handleReset}
-          className="text-xs text-slate-600 hover:text-slate-400 flex items-center gap-1 transition-colors"
+          className="text-xs text-slate-600 hover:text-slate-400 flex items-center gap-1 transition-colors pb-4"
         >
           <RefreshCw className="w-3 h-3" />
-          Réinitialiser l'application
+          Réinitialiser toute l'application (Hard Reset)
         </button>
       </div>
     </div>
